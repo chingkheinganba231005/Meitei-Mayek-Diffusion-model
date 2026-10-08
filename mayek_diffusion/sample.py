@@ -111,7 +111,7 @@ def paper(ink):
     return 255 - np.clip(np.asarray(ink, np.float32) * 255 + 0.5, 0, 255).astype(np.uint8)
 
 
-def sheet(model, val_set, printer, path, writers=6, refs=4, steps=16, device="cpu", dtype=None):
+def sheet(model, val_set, printer, path, writers=6, refs=4, steps=16, device="cpu", dtype=None, prior=True):
     """A progress sheet: per validation writer, its references, then two of its other words as
     written (left) and as generated (right)."""
     rows, per = [], val_set.per_writer
@@ -120,7 +120,7 @@ def sheet(model, val_set, printer, path, writers=6, refs=4, steps=16, device="cp
         ref = [val_set.target(i).astype(np.float32) / 255 for i in items[:refs]]
         real = [val_set.target(i).astype(np.float32) / 255 for i in items[refs:refs + 2]]
         gen = generate(model, [val_set.texts[i] for i in items[refs:refs + 2]], ref, printer, steps=steps,
-                       seed=w, device=device, dtype=dtype)
+                       seed=w, device=device, dtype=dtype, prior=prior)
         gap = np.zeros((CANVAS_H, 12), np.float32)
         bar = np.full((CANVAS_H, 2), 0.5, np.float32)
         parts = [p for r in ref for p in (r, gap)] + [bar, gap]

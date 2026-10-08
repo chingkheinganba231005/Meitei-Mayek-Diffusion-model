@@ -1,0 +1,22 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: The word repository at the pinned commit
+        run: |
+          git clone -q https://github.com/chingkheinganba231005/meitei-mayek-word-recognition "$RUNNER_TEMP/word_repo"
+          git -C "$RUNNER_TEMP/word_repo" checkout -q bdee9e7
+          echo "WORD_REPO=$RUNNER_TEMP/word_repo" >> "$GITHUB_ENV"
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt gradio
+      - run: pytest -q

@@ -1,0 +1,12 @@
+# PyTorch is preinstalled on Colab; elsewhere install the build for your machine from pytorch.org.
+# The word repository (github.com/chingkheinganba231005/meitei-mayek-word-recognition, commit
+# bdee9e7) must be on the Python path: its mayek_words draws the training words and the printed
+# form of a word.
+diffusers==0.41.0
+numpy
+scipy
+pillow
+safetensors
+huggingface_hub
+# the deployed word recogniser that scores the generated words (mayek_htr)
+timm

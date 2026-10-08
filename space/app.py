@@ -95,11 +95,13 @@ def write(text, source, preset, uploads, guidance, steps, width, seed, samples):
         canvases = generate(model, words, refs, PRINTER, steps=int(steps), sampler=SAMPLING["demo_sampler"],
                             guidance=float(guidance), interval=tuple(SAMPLING["interval"]), width_scale=float(width),
                             seed=int(seed) + k, device="cpu")
-        lines.append(enlarge(compose_line(canvases), 3))
+        lines.append(compose_line(canvases))
+    W = max(x.shape[1] for x in lines)                  # the samples one above the other
+    image = enlarge(np.concatenate([np.pad(x, ((0, 6), (0, W - x.shape[1]))) for x in lines]), 3)
     path = Path(tempfile.mkdtemp()) / "meitei_mayek.png"
-    Image.fromarray(lines[0]).save(path)
+    Image.fromarray(image).save(path)
     took = f"{time.time() - t0:.0f} s for {len(words) * int(samples)} word(s)."
-    return lines, str(path), "\n".join(notes + [took])
+    return image, str(path), "\n".join(notes + [took])
 
 
 def build():
@@ -128,7 +130,8 @@ def build():
                 source = gr.Radio(CHOICES, value=CHOICES[0], label="Hand")
                 preset = gr.Dropdown(list(PRESETS), value=next(iter(PRESETS), None), label="Test writer")
                 uploads = gr.File(file_count="multiple", file_types=["image"], label="Word images (1 to 8)")
-                refs = gr.Gallery(label="References as the generator sees them", columns=4, height=160)
+                refs = gr.Gallery(label="References as the generator sees them", columns=4, height=180,
+                                  object_fit="contain")
                 notes_in = gr.Markdown()
         with gr.Accordion("Settings", open=False):
             guidance = gr.Slider(1.0, 4.0, value=float(SAMPLING["guidance"]), step=0.25, label="Guidance")
@@ -137,7 +140,7 @@ def build():
             seed = gr.Number(value=0, precision=0, label="Seed")
             samples = gr.Slider(1, 4, value=1, step=1, label="Samples")
         go = gr.Button("Write", variant="primary")
-        out = gr.Gallery(label="Written", columns=1)
+        out = gr.Image(label="Written", type="numpy", interactive=False, show_label=True)
         download = gr.File(label="PNG")
         notes = gr.Markdown()
         for comp in (source, preset, uploads):

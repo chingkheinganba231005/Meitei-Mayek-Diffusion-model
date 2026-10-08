@@ -54,15 +54,36 @@ def recognise(fixed_set, recogniser, word_repo, out, predictions=None, lm=True, 
             "with_lm": {k: res["with_lm"][k] for k in KEEP} if "with_lm" in res else None}
 
 
+def frechet(f1, f2, eps=1e-6):
+    """Fréchet distance between Gaussians fitted to two sets of features (rows), as pytorch-fid
+    computes it."""
+    from scipy import linalg
+
+    f1, f2 = np.asarray(f1, np.float64), np.asarray(f2, np.float64)
+    mu1, mu2 = f1.mean(0), f2.mean(0)
+    s1, s2 = np.atleast_2d(np.cov(f1, rowvar=False)), np.atleast_2d(np.cov(f2, rowvar=False))
+    covmean = linalg.sqrtm(s1.dot(s2))
+    covmean = covmean[0] if isinstance(covmean, tuple) else covmean
+    if not np.isfinite(covmean).all():
+        off = np.eye(s1.shape[0]) * eps
+        covmean = linalg.sqrtm((s1 + off).dot(s2 + off))
+        covmean = covmean[0] if isinstance(covmean, tuple) else covmean
+    covmean = covmean.real
+    d = mu1 - mu2
+    return float(d.dot(d) + np.trace(s1) + np.trace(s2) - 2 * np.trace(covmean))
+
+
 class StyleScorer:
     """HWD, FID and KID of the HWD package, built once (their networks are downloaded on first
-    use). height 32, as the package's defaults and its paper."""
+    use). height 32, as the package's defaults and its paper. FID is the Fréchet distance of
+    the package's Inception features, computed here (the package's own call to
+    scipy.linalg.sqrtm uses an argument that recent SciPy no longer accepts)."""
 
     def __init__(self, height=32):
         from hwd.scores import FIDScore, HWDScore, KIDScore     # noqa: F401  (fails early if missing)
 
         self.height = height
-        self._made = {}
+        self._made, self._reals = {}, {}
 
     def _get(self, name):
         if name not in self._made:
@@ -77,8 +98,15 @@ class StyleScorer:
 
         out = {}
         for name in which:
-            fakes, reals = FolderDataset(str(fake_root)), FolderDataset(str(real_root))
-            out[name] = float(self._get(name)(fakes, reals))
+            score = self._get(name)
+            key = (name, str(Path(real_root).resolve()))
+            if key not in self._reals:            # the real words' features serve every setting
+                self._reals[key] = score.digest(FolderDataset(str(real_root)))
+            fake, real = score.digest(FolderDataset(str(fake_root))), self._reals[key]
+            if name == "fid":
+                out[name] = frechet(fake.features.cpu().numpy(), real.features.cpu().numpy())
+            else:
+                out[name] = float(score.distance(fake, real))
         return out
 
 

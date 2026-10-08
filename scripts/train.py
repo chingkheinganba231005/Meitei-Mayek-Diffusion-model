@@ -54,7 +54,8 @@ def main():
         mcfg = ModelConfig(channels=(32, 64, 64), d=64, text_layers=1, style_layers=1)
     printer, val = Printer(load_priors()), WordSet(Path(args.data) / "val")
     dtype = torch.bfloat16 if cuda else None
-    draw = lambda model, step, path: sheet(model, val, printer, path, device=args.device, dtype=dtype)
+    draw = lambda model, step, path: sheet(model, val, printer, path, device=args.device, dtype=dtype,
+                                           prior=not args.no_prior)
     result = train(cfg, args.data, args.run, mcfg, device=args.device, local_dir=args.local, sheet=draw)
     if result["done"]:
         final = torch.load(Path(args.run) / "final.pt", map_location="cpu", weights_only=False)

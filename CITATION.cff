@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite it as below."
+type: software
+title: "Handwritten Meitei Mayek word generation: code, experiments and demonstration"
+abstract: >-
+  The first diffusion model for handwritten Meitei Mayek, and the first learned generator of
+  the script's handwriting. It writes any word in the hand of a writer shown in one to eight
+  reference word images, and is trained only on pseudo-writers composed from the isolated
+  characters of TUMMHCD. The repository holds the generator, its training and evaluation code,
+  the notebooks, the demonstration and the tests.
+authors:
+  - family-names: Rajkumar
+    given-names: Chingkheinganba
+    affiliation: "School of Computing and Data Science, The University of Hong Kong"
+    orcid: "https://orcid.org/0009-0002-2620-0281"
+repository-code: "https://github.com/chingkheinganba231005/Meitei-Mayek-Diffusion-model"
+license: MIT
+keywords:
+  - Meitei Mayek
+  - Manipuri
+  - handwriting generation
+  - diffusion models
+  - few-shot style imitation

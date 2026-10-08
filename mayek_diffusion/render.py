@@ -104,7 +104,9 @@ def render_split(split, glyphs, lexicon, sizes, out_dir, writers, words=16, shar
     jobs = [(k, range(a, min(a + shard_writers, writers)), words, seed, out / f"shard_{k:04d}.npz")
             for k, a in enumerate(range(0, writers, shard_writers))]
     args = (str(glyphs), str(lexicon), str(sizes), allographs, scrambled, overrides)
-    t0 = time.time()
+    t0, before = time.time(), {}
+    if (out / "info.json").exists():                 # an earlier session: keep its minutes
+        before = json.loads((out / "info.json").read_text(encoding="utf-8"))
     times_path = out / "times.json"         # seconds of one process per shard, kept across sessions
     times = json.loads(times_path.read_text(encoding="utf-8")) if times_path.exists() else {}
     with mp.get_context("fork").Pool(processes, initializer=_setup, initargs=args) as pool:
@@ -117,7 +119,8 @@ def render_split(split, glyphs, lexicon, sizes, out_dir, writers, words=16, shar
             "seed": seed, "allographs": allographs, "scrambled": scrambled, "overrides": overrides,
             "glyphs": str(glyphs), "lexicon": str(lexicon), "sizes": str(sizes), "max_width": MAX_WIDTH,
             "style_keys": STYLE_KEYS, "shards": [Path(j[4]).name for j in jobs],
-            "minutes": round((time.time() - t0) / 60, 1), "core_minutes": round(sum(times.values()) / 60, 1)}
+            "minutes": round(before.get("minutes", 0.0) + (time.time() - t0) / 60, 1),
+            "core_minutes": round(sum(times.values()) / 60, 1)}
     (out / "info.json").write_text(json.dumps(info, indent=1), encoding="utf-8")
     return info
 
