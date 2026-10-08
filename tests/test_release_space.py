@@ -54,7 +54,8 @@ def test_cards_fill_in():
                              "kid": 0.01},
                "eval_val_grid": {"chosen": dict(BASE)}}
     text = results_text(results)
-    assert "3.00%" in text and "2.500" in text and "relative width 0.1" in text
+    assert "3.00%" in text and "2.500" in text and "relative width 0.1" in text and "4 reference words" in text
+    assert "no guidance" in results_text({"eval_val_grid": {"chosen": dict(BASE, guidance=1.0, refs=1), "writers": 7}})
     model, space = cards(results, config)
     assert "113.5 M parameters" in model and "1234 steps" in model and "owner_generator" in model
     assert "{" not in space.split("---")[2] and space.startswith("---\ntitle:")

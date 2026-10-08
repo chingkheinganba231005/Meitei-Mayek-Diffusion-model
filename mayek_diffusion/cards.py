@@ -31,8 +31,10 @@ def setting_text(s):
     sampler = "Heun's method" if s["sampler"] == "heun" else "DPM-Solver++(2M)"
     lo, hi = s["interval"]
     where = "at every noise level" if hi >= 1000 else f"for noise levels in ({lo:g}, {hi:g}]"
+    guidance = "no guidance" if s["guidance"] == 1.0 else f"guidance {s['guidance']:g} on the style {where}"
+    refs = f"{s['refs']} reference word" + ("s" if s["refs"] != 1 else "")
     return (f"the average of the weights with relative width {s['sigma_rel']:g}, {sampler} with {s['steps']} steps, "
-            f"guidance {s['guidance']:g} on the style {where}, {s['refs']} reference word(s)")
+            f"{guidance}, {refs}")
 
 
 def results_text(r):
@@ -43,8 +45,9 @@ def results_text(r):
         parts.append(f"It was trained on {t['words']:,} synthetic words of {t['writers']:,} pseudo-writers composed "
                      "from the isolated characters of TUMMHCD, without any real handwritten word.")
     if "eval_val_grid" in r and r["eval_val_grid"].get("chosen"):
-        parts.append("Sampling settings chosen on 200 validation writers: " + setting_text(r["eval_val_grid"]["chosen"])
-                     + ".")
+        g = r["eval_val_grid"]
+        parts.append(f"Sampling settings chosen on {g.get('writers', 200):,} validation writers: "
+                     + setting_text(g["chosen"]) + ".")
     if "eval_test" in r:
         e = r["eval_test"]
         s = (f"On {e['writers']:,} test writers ({e['words']:,} generated words), the word recogniser reads the "

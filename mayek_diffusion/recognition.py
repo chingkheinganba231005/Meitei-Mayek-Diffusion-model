@@ -120,7 +120,7 @@ def finetune_recogniser(checkpoint, words, out, generated=None, mix=0.5, steps=5
     for step in range(steps):
         items = _items(next(batches))
         if gen is not None:
-            items += [(gen.images[i], gen.texts[i]) for i in rng.choice(len(gen), n_gen, replace=False)]
+            items += [(gen.images[i], gen.texts[i]) for i in rng.choice(len(gen), n_gen, replace=len(gen) < n_gen)]
         b = make_batch(items)
         x, widths = prepare(b, device)
         x = (augment(x, widths, PRESETS[cfg.aug]) - MEAN) / STD
