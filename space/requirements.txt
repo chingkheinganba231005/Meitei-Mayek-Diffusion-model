@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+diffusers==0.41.0
+numpy
+scipy
+pillow
+safetensors
+huggingface_hub
