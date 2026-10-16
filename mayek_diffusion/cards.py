@@ -88,11 +88,21 @@ def owner_text(config):
     return ""
 
 
+def training_text(config):
+    """What the card says about the training objective of the released run."""
+    objective = config.get("source", {}).get("objective")
+    if objective == "coverage":
+        return (" It was trained with reference consistency: for two disjoint sets of a writer's words that show "
+                "the same letters of the target word, the predictions are asked to agree, so that the hand follows "
+                "the writer rather than the particular reference words.")
+    return ""
+
+
 def cards(results, config, hf_id=HF_ID, licence="mit"):
     """(model card, Space card) as Markdown."""
     fill = {"hf_id": hf_id, "repo_url": REPO_URL, "results": results_text(results), "licence": licence,
             "parameters": f"{config['parameters'] / 1e6:.1f}", "step": config.get("source", {}).get("step", "?"),
-            "owner": owner_text(config)}
+            "owner": owner_text(config), "training": training_text(config)}
     model = (ROOT / "space" / "MODEL_CARD.md").read_text(encoding="utf-8").format(**fill)
     space = (ROOT / "space" / "README.md").read_text(encoding="utf-8").format(**fill)
     return model, space

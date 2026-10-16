@@ -18,7 +18,7 @@ writer shown in one to eight reference word images, or in a random hand.
 It denoises the word's image directly in pixels (EDM; a UNet of three levels on the 64-row
 canvas folded 2 x 2 into channels), guided by the word printed in the font and stretched over
 the width the handwriting should fill, by the word's characters, and by a style encoder over
-the reference words. {parameters} M parameters; trained once, for {step} steps.
+the reference words.{training} {parameters} M parameters; trained for {step} steps.
 
 {results}
 

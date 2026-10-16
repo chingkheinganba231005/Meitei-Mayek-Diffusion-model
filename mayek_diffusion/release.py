@@ -52,7 +52,8 @@ def load_weights(path, sigma_rel=0.10, device="cpu"):
                        "sigma_rel": config["sampling"].get("sigma_rel"), "prior": config.get("prior", True)}
     ck = torch.load(path, map_location="cpu", weights_only=False)
     cfg = ck.get("cfg") or {}
-    info = {"step": ck.get("step"), "prior": cfg.get("prior", ck.get("prior")), "sigma_rel": None}
+    info = {"step": ck.get("step"), "prior": cfg.get("prior", ck.get("prior")), "sigma_rel": None,
+            "objective": cfg.get("reference_objective")}
     if "adapted" in ck:                                   # finetune.adapt
         state, info["kind"], info["sigma_rel"] = ck["model"], "adapted", ck["adapted"].get("sigma_rel")
     elif isinstance(ck.get("ema"), dict) and "models" in ck["ema"]:          # last.pt

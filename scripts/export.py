@@ -71,7 +71,7 @@ def main():
                 "demo_sampler": SAMPLING["demo_sampler"], "demo_steps": SAMPLING["demo_steps"],
                 "chosen_on": "eval_val_grid.json" if grid.exists() else "defaults", "owner": owner_use}
     source = {"weights": Path(args.weights).name, "run": Path(args.weights).parent.name, "step": info.get("step"),
-              "sigma_rel": setting["sigma_rel"]}
+              "sigma_rel": setting["sigma_rel"], "objective": info.get("objective")}
     export(model, model_dir, sampling=sampling, prior=info.get("prior") is not False, source=source)
     if owner_use == "adapted":
         export(load_weights(args.owner_weights)[0], model_dir, name="owner_generator")

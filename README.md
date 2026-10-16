@@ -35,32 +35,43 @@ number written to `results/` by the code.
 6. **Diffusion** (`edm.py`). EDM (Karras et al. 2022) with the learned loss weighting of EDM2;
    classifier-free guidance on the style, applied in an interval of noise levels; Heun's method
    or DPM-Solver++(2M) for sampling.
-7. **Training** (`train.py`). One run against a budget of 32 GPU-hours, its length in steps set
-   from the speed of its first steps, resumable across Colab sessions, keeping three
-   power-function averages of the weights (EDM2) to choose from afterwards.
-8. **Evaluation** (`protocol.py`, `scores.py`). The deployed word recogniser reads the
+7. **Reference consistency** (`reference_evidence.py`). A few reference words show only some of
+   a writer's letters, and a generator can copy incidental details of the words it is given. In
+   training, two disjoint sets of the writer's other words that show the same letters of the
+   target word are drawn, the denoiser is run with each, and a penalty asks the two predictions
+   to agree, weighted by the share of the target's letters the sets show. With weight λ, each
+   prediction moves a share λ/(1+2λ) of the way towards what another, equally informative set of
+   the same writer would give; sets that show different letters are left free to differ.
+8. **Training** (`train.py`). A controlled study: every run trains the same model for the same
+   number of steps, and only the objective differs: the proposed one, the same second pass
+   without the penalty, the penalty on unmatched sets, the penalty's weights shuffled, and one
+   pass. EDM2's power-function averages of the weights are kept for each run, and runs resume
+   across Colab sessions.
+9. **Evaluation** (`protocol.py`, `scores.py`). The deployed word recogniser reads the
    generated words (CER, WER); HWD compares them with the real words of the same writers.
-   The average, the guidance, the sampler and the number of references are chosen on
-   validation writers by a rule fixed in advance; the test writers are scored once.
-9. **The author's hand** (`owner.py`, `finetune.py`). The 100 real words of the word
+   The runs of the study are compared on the same validation words, with intervals from
+   resampling writers. The average, the guidance, the sampler and the number of references are
+   then chosen for the chosen run by a rule fixed in advance; the test writers are scored once.
+10. **The author's hand** (`owner.py`, `finetune.py`). The 100 real words of the word
    recognition project: few-shot from four of them, and adaptation on seventy, scored on the
    thirty held out.
 
 ## Running it
 
-The notebooks run on Google Colab with a working folder on Google Drive (at least 12 GB free).
+The notebooks run on Google Colab with a working folder on Google Drive (about 60 GB: the data
+and the runs of the training study).
 Run them in order; each says what it needs, can be run again to resume, and ends by
 disconnecting the runtime.
 
 | Notebook | Runtime | GPU hours | What it does |
 |---|---|---:|---|
 | `notebooks/1_render_data.ipynb` | CPU | 0 | renders the training, validation and test writers |
-| `notebooks/2_train.ipynb` | A100 | 32.7 | the checks (overfit, smoke test), then the main run |
-| `notebooks/3_evaluate.ipynb` | A100 | 1.5 | the setting chosen on validation; the test writers, once |
+| `notebooks/2_train.ipynb` | A100 | 19 (+16) | the checks and the pilot, then the runs of the training study (seeds 1 and 2 if the first results call for them) |
+| `notebooks/3_evaluate.ipynb` | A100 | 4 | the study compared on validation; the chosen run's setting; the test writers, once |
 | `notebooks/4_owner_hand.ipynb` | A100 | 0.5 | few-shot and adapted imitation of the author's hand |
 | `notebooks/5_release.ipynb` | CPU | 0 | the model and the demo on Hugging Face |
 | `notebooks/6_generated_words_for_recognition.ipynb` | A100 | 1.0 | generated words as training data for the recogniser |
-| `notebooks/7_ablation_no_prior.ipynb` | A100 | 3.5 | training without the printed word; quality against training |
+| `notebooks/7_ablation_no_prior.ipynb` | A100 | 1.0 | training without the printed word; quality against training |
 
 The scripts in `scripts/` do the work; each explains itself (`python scripts/<name>.py -h`).
 
@@ -115,8 +126,9 @@ WORD_REPO=word_repo pytest -q
 
 ```
 mayek_diffusion/  canvas, pseudo-writers, rendering, batches, model, EDM, weight averages,
-                  training, sampling, evaluation, the author's hand, adaptation, release,
-                  cards, the demo's helpers, generated words for the recogniser
+                  reference consistency, training, sampling, evaluation, the author's hand,
+                  adaptation, release, cards, the demo's helpers, generated words for the
+                  recogniser
 scripts/          command-line tools used by the notebooks (each explains itself)
 notebooks/        the experiments, in order
 space/            the Gradio demo and the Hugging Face cards
