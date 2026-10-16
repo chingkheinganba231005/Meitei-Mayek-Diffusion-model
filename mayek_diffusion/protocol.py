@@ -26,7 +26,7 @@ import torch
 from .edm import karras_sigmas
 from .evaluate import generate_writers, write_fixed_set, write_writer_folders
 from .release import load_weights
-from .scores import choose
+from .scores import choose, per_writer
 from .sheets import grid
 
 BASE = {"sigma_rel": 0.10, "guidance": 2.0, "interval": [0.3, 5.0], "sampler": "heun", "steps": 18, "refs": 4}
@@ -84,12 +84,28 @@ class Evaluator:
     which) -> {name: score} or None (no style scores). work: a local folder for the images."""
 
     def __init__(self, weights, ds, printer, writers, recognise, style, work, device="cuda", batch=64,
-                 prior=None, log=print):
+                 prior=None, log=print, strict=True, max_ref_width=384):
         self.weights, self.ds, self.printer, self.writers = weights, ds, printer, [int(w) for w in writers]
         self.recognise_fn, self.style_fn, self.work = recognise, style, Path(work)
         self.device, self.batch, self.log, self.prior = device, batch, log, prior
         self.dtype = torch.bfloat16 if str(device).startswith("cuda") else None
         self.models, self.refs_cache = {}, {}
+        self.strict, self.max_ref_width = strict, max_ref_width
+
+    def target_indices(self, first, words, refs):
+        """The items generated for every model and setting alike. strict: a target whose text is
+        also among the writer's references, or among the next writer's (the wrong-style
+        control), is left out, so that no word is written by copying a reference."""
+        per, items = self.ds.per_writer, []
+        for j, w in enumerate(self.writers):
+            nxt = self.writers[(j + 1) % len(self.writers)]
+            seen = set()
+            if self.strict:
+                seen = set(self.ds.texts[w * per:w * per + refs]) | set(self.ds.texts[nxt * per:nxt * per + refs])
+            items += [w * per + i for i in range(first, first + words) if self.ds.texts[w * per + i] not in seen]
+        if not items:
+            raise ValueError("every target word is also a reference word")
+        return items
 
     def model(self, sigma_rel):
         if sigma_rel not in self.models:
@@ -98,13 +114,14 @@ class Evaluator:
             self.models[sigma_rel] = (m, info)
         return self.models[sigma_rel]
 
-    def reference(self, first, words):
+    def reference(self, first, words, refs=None):
         """The recogniser on the real words that the generated words copy (once per range)."""
-        k = (first, words)
+        refs = first if refs is None else refs
+        k = (first, words, refs)
         if k not in self.refs_cache:
-            d = self.work / f"real_w{first}-{first + words}"
+            d = self.work / f"real_w{first}-{first + words}_r{refs}"
             per = self.ds.per_writer
-            items = [w * per + i for w in self.writers for i in range(first, first + words)]
+            items = self.target_indices(first, words, refs)
             canvases = [self.ds.target(i).astype(np.float32) / 255 for i in items]
             texts = [str(self.ds.texts[i]) for i in items]
             d.mkdir(parents=True, exist_ok=True)
@@ -120,12 +137,14 @@ class Evaluator:
         model, info = self.model(setting["sigma_rel"])
         prior = info.get("prior") if self.prior is None else self.prior
         prior = True if prior is None else bool(prior)
-        ref = self.reference(first, words)
+        ref = self.reference(first, words, setting["refs"])
+        indices = self.target_indices(first, words, setting["refs"])
         name = key(setting, first, words)
         d = self.work / name
         kw = dict(refs=setting["refs"], first=first, words=words, batch=self.batch, seed=seed,
                   steps=setting["steps"], sampler=setting["sampler"], guidance=setting["guidance"],
                   interval=tuple(setting["interval"]), device=self.device, dtype=self.dtype, prior=prior)
+        kw.update(target_indices=set(indices), max_ref_width=self.max_ref_width)
         t0 = time.time()
         rows = generate_writers(model, self.ds, self.printer, self.writers, **kw)
         if str(self.device).startswith("cuda"):
@@ -133,6 +152,8 @@ class Evaluator:
         seconds = time.time() - t0
         calls, guided = cost(setting)
         out = {"key": name, "setting": setting, "first": first, "words": len(rows), "writers": len(self.writers),
+               "strict": self.strict, "max_ref_width": self.max_ref_width, "targets": indices,
+               "left_out": len(self.writers) * words - len(indices),
                "nfe": calls, "nfe_guided": guided, "seconds_per_word": round(seconds / max(len(rows), 1), 4),
                **self._score(rows, d, ref, fid_kid),
                "reference_greedy_cer": ref["scores"]["greedy"]["cer"],
@@ -155,10 +176,15 @@ class Evaluator:
         out = {"greedy_cer": s["greedy"]["cer"], "greedy_wer": s["greedy"]["wer"],
                "with_lm_cer": s["with_lm"]["cer"] if s["with_lm"] else None,
                "with_lm_wer": s["with_lm"]["wer"] if s["with_lm"] else None, "recognised": s}
+        if (d / "read.tsv").exists():           # the recogniser's reading of every word
+            out["per_writer"] = per_writer(d / "read.tsv", [r["writer"] for r in rows])
         if self.style_fn is not None:
             shutil.rmtree(d / "writers", ignore_errors=True)
             write_writer_folders(gen, [r["writer"] for r in rows], d / "writers")
-            out.update(self.style_fn(d / "writers", ref["folder"], ("hwd", "fid", "kid") if fid_kid else ("hwd",)))
+            style = self.style_fn(d / "writers", ref["folder"], ("hwd", "fid", "kid") if fid_kid else ("hwd",))
+            for w, v in style.pop("hwd_per_writer", {}).items():
+                out.setdefault("per_writer", {}).setdefault(str(int(w)), {})["hwd"] = v
+            out.update(style)
         return out
 
 

@@ -21,12 +21,12 @@ from .sample import generate, paper
 
 
 def generate_writers(model, ds, printer, writers, refs=4, batch=64, seed=0, first=None, words=None, ref_of=None,
-                     **kw):
+                     target_indices=None, **kw):
     """-> list of dicts (writer, text, generated canvas, real canvas) over the given writers, in
     order. Words of several writers share a batch; batches group words of similar printed width.
     The generated words are items first .. first + words - 1 of each writer (default: all after
-    the references). ref_of(w): the writer whose references are used for writer w (the
-    wrong-style control); by default w itself."""
+    the references), only those in target_indices if it is given. ref_of(w): the writer whose
+    references are used for writer w (the wrong-style control); by default w itself."""
     per, jobs = ds.per_writer, []
     first = refs if first is None else first
     words = per - first if words is None else words
@@ -35,7 +35,8 @@ def generate_writers(model, ds, printer, writers, refs=4, batch=64, seed=0, firs
         items = list(range(int(w) * per, (int(w) + 1) * per))
         rw = int(ref_of(w)) if ref_of is not None else int(w)
         ref = [ds.target(i).astype(np.float32) / 255 for i in range(rw * per, rw * per + refs)]
-        jobs += [(int(w), i, ref) for i in items[first:first + words]]
+        jobs += [(int(w), i, ref) for i in items[first:first + words]
+                 if target_indices is None or i in target_indices]
     order = sorted(range(len(jobs)), key=lambda j: ink_width(printer(ds.texts[jobs[j][1]])))
     gen = [None] * len(jobs)
     for k in range(0, len(order), batch):

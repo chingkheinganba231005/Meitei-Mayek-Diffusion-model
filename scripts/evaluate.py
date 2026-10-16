@@ -19,6 +19,9 @@ guidance 1, 1.5, 2, 3 with the interval of noise levels where it applies (all, (
 8 references (generating words 9-16). Each stage keeps the lowest HWD among the settings whose
 greedy CER is at most the reference CER (the recogniser on the real words) plus 1 point.
 
+A target word whose text is also among the references (the writer's own, or the next writer's
+for the control) is left out, so that no word is written by copying a reference.
+
 score: one setting (the grid's choice, or --sigma-rel and the other flags) on the writers of a
 split: CER and WER greedy and with the language model, the reference level, HWD, with
 --fid-kid FID and KID, with --control the same texts written with the next writer's
@@ -63,6 +66,7 @@ def main():
     ap.add_argument("--label", default="", help="score: a name stored in the results")
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--max-ref-width", type=int, default=384, help="references are cut at this width")
     args = ap.parse_args()
     sys.path.insert(0, args.word_repo)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -80,11 +84,13 @@ def main():
         scorer = StyleScorer()
         style = lambda fake, real, which: scorer(fake, real, which)
     device = None if args.device == "cpu" else args.device
-    read = lambda tar, out: recognise(tar, rec, args.word_repo, out, device=device)
+    read = lambda tar, out: recognise(tar, rec, args.word_repo, out, predictions=Path(out).with_suffix(".tsv"),
+                                     device=device)
     ds = WordSet(Path(args.data) / args.split)
     writers = range(args.first_writer, args.first_writer + args.writers)
     ev = protocol.Evaluator(args.weights, ds, Printer(load_priors()), writers, read, style, args.work,
-                            device=args.device, batch=args.batch, prior=False if args.no_prior else None)
+                            device=args.device, batch=args.batch, prior=False if args.no_prior else None,
+                            max_ref_width=args.max_ref_width)
     extra = {"weights": str(args.weights), "split": args.split, "first_writer": args.first_writer,
              "recogniser": source, "style_scores": not args.no_style}
     if args.command == "tune":

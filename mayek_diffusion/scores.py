@@ -107,6 +107,9 @@ class StyleScorer:
                 out[name] = frechet(fake.features.cpu().numpy(), real.features.cpu().numpy())
             else:
                 out[name] = float(score.distance(fake, real))
+            if name == "hwd":                       # the same distance for each writer alone
+                out["hwd_per_writer"] = {str(a): float(score.distance(fake[a], real[a]))
+                                         for a in sorted(set(fake.authors))}
         return out
 
 
@@ -140,6 +143,48 @@ def bootstrap(refs, hyps, n=2000, seed=0):
     q = lambda v: [round(float(np.percentile(v, 2.5)), 5), round(float(np.percentile(v, 97.5)), 5)]
     return {"cer": round(float(e.sum() / max(c.sum(), 1)), 5), "cer_95ci": q(cer),
             "wer": round(float(w.mean()), 5), "wer_95ci": q(wer), "words": len(refs), "resamples": n}
+
+
+def per_writer(predictions, writers):
+    """Errors of each writer from a --predictions file of eval_recogniser.py, whose rows follow
+    `writers` (the writer of each word, in order) -> {writer: {characters, char_errors (greedy and
+    with_lm), words, word_errors (greedy and with_lm)}}, the counts a paired comparison needs."""
+    rows = [line.split("\t") for line in Path(predictions).read_text(encoding="utf-8").splitlines()[1:] if line]
+    out = {}
+    for w, r in zip(writers, rows):
+        ref, hyps = r[1], {"greedy": r[3], "with_lm": r[4] if len(r) > 4 else ""}
+        d = out.setdefault(str(w), {"characters": 0, "words": 0, "char_errors_greedy": 0, "word_errors_greedy": 0,
+                                    "char_errors_with_lm": 0, "word_errors_with_lm": 0})
+        d["characters"] += len(ref)
+        d["words"] += 1
+        for k, h in hyps.items():
+            d[f"char_errors_{k}"] += edit_distance(ref, h)
+            d[f"word_errors_{k}"] += int(ref != h)
+    return out
+
+
+def paired_bootstrap(a, b, metric, n=5000, seed=0):
+    """Two models scored on the same writers and words -> the difference b - a of a pooled error
+    rate (metric "cer_greedy", "cer_with_lm", "wer_greedy", "wer_with_lm") or of the mean per-writer
+    HWD ("hwd"), with a 95% interval from resampling writers."""
+    writers = sorted(set(a) & set(b))
+    if len(writers) < 2 or set(a) != set(b):
+        raise ValueError("the two results need the same writers")
+    if metric == "hwd":
+        num = np.array([[b[w], a[w]] for w in writers], np.float64)
+        den = np.ones(len(writers))
+    else:
+        rate, kind = metric.split("_", 1)
+        err, tot = ("char_errors_" + kind, "characters") if rate == "cer" else ("word_errors_" + kind, "words")
+        if any(a[w][tot] != b[w][tot] for w in writers):
+            raise ValueError("the two results were scored on different words")
+        num = np.array([[b[w][err], a[w][err]] for w in writers], np.float64)
+        den = np.array([a[w][tot] for w in writers], np.float64)
+    diff = num[:, 0] - num[:, 1]
+    idx = np.random.default_rng(seed).integers(0, len(writers), size=(n, len(writers)))
+    draws = diff[idx].sum(1) / den[idx].sum(1)
+    return {"metric": metric, "b_minus_a": float(diff.sum() / den.sum()), "writers": len(writers), "resamples": n,
+            "ci95": [float(np.percentile(draws, 2.5)), float(np.percentile(draws, 97.5))]}
 
 
 def read_predictions(path, column="with_lm"):

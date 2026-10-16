@@ -35,7 +35,7 @@ class EDM:
     def weight(self, sigma):
         return (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
 
-    def loss(self, net, y, logvar=None, sigma=None, noise=None):
+    def loss(self, net, y, logvar=None, sigma=None, noise=None, return_denoised=False):
         """-> (loss, per-word weighted mse, sigma). The per-word mse is averaged over pixels."""
         sigma = self.sample_sigma(y.shape[0], y.device) if sigma is None else sigma
         noise = torch.randn_like(y) if noise is None else noise
@@ -43,9 +43,11 @@ class EDM:
         mse = ((d - y.float()) ** 2).mean((1, 2, 3))
         wm = self.weight(sigma) * mse
         if logvar is None:
-            return wm.mean(), wm.detach(), sigma
-        u = logvar(sigma.log() / 4)
-        return (wm / u.exp() + u).mean(), wm.detach(), sigma
+            result = (wm.mean(), wm.detach(), sigma)
+        else:
+            u = logvar(sigma.log() / 4)
+            result = ((wm / u.exp() + u).mean(), wm.detach(), sigma)
+        return (*result, d) if return_denoised else result
 
 
 class LogVar(nn.Module):

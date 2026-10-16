@@ -5,8 +5,16 @@
         --run /content/drive/MyDrive/meitei-word-diffusion/runs/main --hours 32
 
 The number of steps is set from the speed of the first steps (mayek_diffusion.train). Running
-the same command again resumes from <run>/last.pt. A sample sheet of validation writers is
-drawn at every checkpoint (<run>/samples/) and at the end (<run>/samples/final.png).
+the same command again resumes from <run>/last.pt (with other settings it refuses: use a new
+folder). A sample sheet of validation writers is drawn at every checkpoint (<run>/samples/) and at
+the end (<run>/samples/final.png).
+
+The training study runs every variant for the same number of steps (--steps):
+
+    python scripts/train.py ... --run .../runs/study/coverage_seed0 --objective coverage --steps 20000
+
+--objective: baseline (the original sampler), single (the study's sampler, one pass), paired,
+ungated, random or coverage (mayek_diffusion/reference_evidence.py explains them).
 --tiny trains a very small model on small batches, for dry runs on CPU.
 """
 
@@ -33,6 +41,14 @@ def main():
     ap.add_argument("--save-minutes", type=float, default=20.0)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--tiny", action="store_true")
+    ap.add_argument("--objective", default="baseline", choices=["baseline", "single", "paired", "ungated", "random",
+                                                                "coverage"],
+                    help="the variant of the training study (mayek_diffusion/reference_evidence.py)")
+    ap.add_argument("--reference-weight", type=float, default=0.5, help="weight of the consistency penalty")
+    ap.add_argument("--pair-fraction", type=float, default=0.5, help="share of a batch given the second pass")
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--pixels", type=int, default=128 * 256, help="canvas pixels per batch")
+    ap.add_argument("--session-hours", type=float, default=23.5, help="stop and save after this long in a session")
     args = ap.parse_args()
     sys.path.insert(0, args.word_repo)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -47,7 +63,9 @@ def main():
 
     cuda = args.device.startswith("cuda")
     cfg = TrainConfig(hours=args.hours, steps=args.steps, stop_at=args.stop_at, prior=not args.no_prior,
-                      save_minutes=args.save_minutes)
+                      save_minutes=args.save_minutes, reference_objective=args.objective,
+                      w_reference=args.reference_weight, pair_fraction=args.pair_fraction, seed=args.seed,
+                      pixels=args.pixels, session_hours=args.session_hours)
     mcfg = ModelConfig(channels=tuple(args.channels))
     if args.tiny:
         cfg.pixels, cfg.warmup, cfg.log_every, cfg.val_every = 8 * 128, 2, 2, 4

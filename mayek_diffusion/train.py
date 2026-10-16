@@ -1,7 +1,10 @@
 """Training: one run against a time budget, resumable across Colab sessions.
 
 The number of steps is fixed once, early in the run, from the speed of `measure_steps` steps
-taken after `measure_skip` steps of warm-up: steps = hours x 3600 / seconds per step x 0.97.
+taken after `measure_skip` steps of warm-up: steps = hours x 3600 / seconds per step x 0.97,
+unless `steps` is given (the runs of the training study share one step count).
+`reference_objective` chooses the variant of the study (reference_evidence.py); "baseline" is
+the original batch sampler.
 The learning rate warms up over `warmup` steps and then follows a cosine to lr x lr_min at the
 last step. A checkpoint
 (everything needed to resume) is written to local disk every `save_minutes` and copied to the
@@ -26,6 +29,7 @@ from .data import Batcher, Prefetch, WordSet
 from .edm import EDM, LogVar
 from .ema import PowerEMA
 from .model import Generator, ModelConfig, config_dict, supcon
+from .reference_evidence import OBJECTIVES, TWO_PASSES, PairedBatcher, consistency, pair_weights
 
 
 @dataclass
@@ -58,6 +62,15 @@ class TrainConfig:
     val_every: int = 2000
     save_minutes: float = 20.0
     seed: int = 0
+    reference_objective: str = "baseline"   # baseline, single, paired, ungated, random, coverage
+    w_reference: float = 0.5               # the consistency penalty (lam: a share lam / (1 + 2 lam))
+    reference_sigma: tuple = (0.2, 5.0)    # noise levels where the penalty applies
+    pair_fraction: float = 0.5             # share of each batch given the second pass
+    max_ref_width: int = 384
+
+
+# settings that may change when a run is resumed (the others must stay as they were)
+RESUMABLE = {"hours", "session_hours", "stop_at", "save_minutes", "log_every", "val_every"}
 
 
 def say(message):
@@ -77,13 +90,19 @@ def lr_at(step, total, cfg):
 def to_device(b, device):
     img = lambda a: torch.from_numpy(a).to(device, non_blocking=True).float().div_(127.5).sub_(1)
     t = lambda a: torch.from_numpy(np.ascontiguousarray(a)).to(device, non_blocking=True)
-    return {"target": img(b["target"])[:, None], "prior": img(b["prior"])[:, None], "ref": img(b["ref"]),
-            "ref_width": t(b["ref_width"]), "ref_mask": t(b["ref_mask"]), "text": t(b["text"]),
-            "writer": t(b["writer"]), "width": t(b["width"]), "log_width_ratio": t(b["log_width_ratio"])}
+    out = {"target": img(b["target"])[:, None], "prior": img(b["prior"])[:, None], "ref": img(b["ref"]),
+           "ref_width": t(b["ref_width"]), "ref_mask": t(b["ref_mask"]), "text": t(b["text"]),
+           "writer": t(b["writer"]), "width": t(b["width"]), "log_width_ratio": t(b["log_width_ratio"])}
+    if "ref_alt" in b:
+        out.update(ref_alt=img(b["ref_alt"]), ref_width_alt=t(b["ref_width_alt"]), ref_mask_alt=t(b["ref_mask_alt"]),
+                   pair_valid=t(b["pair_valid"]), pair_weight=t(b["pair_weight"]), second=t(b["second"]))
+    return out
 
 
 def step_losses(model, logvar, edm, b, cfg, drop=True, sigma=None, noise=None):
-    """-> (total loss, dict of detached terms)."""
+    """-> (total loss, dict of detached terms). For the two-pass variants of the study, the rows
+    marked `second` are denoised again with their second reference set, at the same noise level
+    and noise; every denoised word counts once in the EDM loss."""
     y, prior = b["target"], b["prior"]
     B = y.shape[0]
     if drop:
@@ -97,10 +116,29 @@ def step_losses(model, logvar, edm, b, cfg, drop=True, sigma=None, noise=None):
     _, _, g_t = model.style(y, b["width"][:, None], torch.ones(B, 1, dtype=torch.bool, device=y.device))
     l_sc = supcon(model.style.proj(torch.cat([cond["g_ref"], g_t])), torch.cat([b["writer"], b["writer"]]))
     l_w = F.mse_loss(model.style.width(cond["g_ref"])[:, 0].float(), b["log_width_ratio"].float())
+    sigma = edm.sample_sigma(B, y.device) if sigma is None else sigma
+    noise = torch.randn_like(y) if noise is None else noise
     net = lambda x_in, c_noise: model(x_in, prior, c_noise, cond)
-    l_edm, wmse, _ = edm.loss(net, y, logvar, sigma=sigma, noise=noise)
-    total = l_edm + cfg.w_supcon * l_sc + cfg.w_width * l_w
-    return total, {"loss": l_edm.detach(), "wmse": wmse.mean(), "supcon": l_sc.detach(), "width": l_w.detach()}
+    l_edm, wmse, _, da = edm.loss(net, y, logvar, sigma=sigma, noise=noise, return_denoised=True)
+    l_ref = y.new_zeros(())
+    weight = torch.zeros_like(sigma)
+    if cfg.reference_objective in TWO_PASSES and "ref_alt" in b and b["second"].any():
+        rows = torch.nonzero(b["second"])[:, 0]
+        cb = model.condition(b["text"][rows], b["ref_alt"][rows], b["ref_width_alt"][rows], b["ref_mask_alt"][rows],
+                             drop_style[rows], drop_both[rows])
+        net_b = lambda x_in, c_noise: model(x_in, prior[rows], c_noise, cb)
+        lb, wb, _, db = edm.loss(net_b, y[rows], logvar, sigma=sigma[rows], noise=noise[rows], return_denoised=True)
+        n = len(rows)
+        l_edm = (l_edm * B + lb * n) / (B + n)
+        wmse = torch.cat([wmse, wb])
+        weight = pair_weights(b, cfg.reference_objective, sigma, drop_style, cfg.reference_sigma)
+        weight = torch.zeros_like(weight).index_copy(0, rows, weight[rows])
+        l_ref = consistency(da[rows], db, sigma[rows], edm, weight[rows]).sum() / B
+    total = l_edm + cfg.w_supcon * l_sc + cfg.w_width * l_w + cfg.w_reference * l_ref
+    terms = {"loss": l_edm.detach(), "wmse": wmse.mean(), "supcon": l_sc.detach(), "width": l_w.detach()}
+    if "ref_alt" in b:
+        terms.update(consistency=l_ref.detach(), penalty_mass=weight.mean(), matched=(b["pair_weight"] > 0).float().mean())
+    return total, terms
 
 
 def split(b, n):
@@ -116,11 +154,12 @@ def run_step(model, logvar, edm, b, cfg, accum, amp):
     out = {}
     chunks = split(b, accum)
     for chunk in chunks:
+        share = len(chunk["target"]) / len(b["target"])     # the parts may differ in size by one
         with amp:
             loss, terms = step_losses(model, logvar, edm, chunk, cfg)
-        (loss / len(chunks)).backward()
+        (loss * share).backward()
         for k, v in terms.items():
-            out[k] = out.get(k, 0.0) + v / len(chunks)
+            out[k] = out.get(k, 0.0) + v * share
     return out
 
 
@@ -162,10 +201,13 @@ def save_local(obj, path):
 
 
 class Copier:
-    """Copies files to a mounted drive on a background thread, one at a time, with retries."""
+    """Copies files to a mounted drive on a background thread, one at a time, with retries. A copy
+    that still fails is reported and the training goes on (the local file is kept and the next
+    checkpoint is copied again); after `give_up` failures in a row the run stops, since its
+    checkpoints no longer reach the drive."""
 
-    def __init__(self):
-        self.thread = None
+    def __init__(self, give_up=3):
+        self.thread, self.ok, self.failures, self.give_up = None, True, 0, give_up
 
     def copy(self, src, dst, tries=4):
         self.wait()
@@ -176,22 +218,31 @@ class Copier:
                     Path(dst).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(src, str(dst) + ".tmp")
                     os.replace(str(dst) + ".tmp", dst)
+                    self.ok = True
                     return
                 except OSError as e:
                     print(f"copy to {dst} failed ({e}); retrying", flush=True)
-                    time.sleep(10 * (k + 1))
+                    if k + 1 < tries:
+                        time.sleep(10 * (k + 1))
+            self.ok = False
         self.thread = threading.Thread(target=run, daemon=False)
         self.thread.start()
 
     def wait(self):
-        if self.thread is not None:
-            self.thread.join()
-            self.thread = None
+        if self.thread is None:
+            return
+        self.thread.join()
+        self.thread = None
+        self.failures = 0 if self.ok else self.failures + 1
+        if self.failures:
+            print(f"the copy to the drive failed ({self.failures} in a row); the local copy is kept", flush=True)
+        if self.failures >= self.give_up:
+            raise RuntimeError("checkpoints no longer reach the drive: look at it, then resume the run")
 
 
 def fixed_val_batches(val_set, cfg, n=4, seed=12345):
     """The same validation batches every time: words, references, noise levels and noise."""
-    batcher = Batcher(val_set, cfg.pixels, cfg.refs, seed=seed)
+    batcher = Batcher(val_set, cfg.pixels, cfg.refs, seed=seed, max_ref_width=cfg.max_ref_width)
     out = []
     for k in range(n):
         b = batcher.sample()
@@ -231,6 +282,16 @@ def train(cfg, data_dir, run_dir, model_cfg=None, device="cuda", local_dir="/con
 
     ck_path = run_dir / "last.pt"
     ck = torch.load(ck_path, map_location="cpu", weights_only=False) if ck_path.exists() else None
+    if cfg.reference_objective not in OBJECTIVES:
+        raise ValueError(f"unknown reference_objective {cfg.reference_objective!r}")
+    if ck:                          # never resume another experiment in the same folder
+        now, old = asdict(cfg), asdict(TrainConfig(**ck["cfg"]))
+        changed = [k for k in now if k not in RESUMABLE and now[k] != old[k]
+                   and not (isinstance(now[k], tuple) and list(now[k]) == list(old[k]))]
+        if changed:
+            raise ValueError(f"{run_dir} was trained with other settings ({', '.join(changed)}): use a new folder")
+    torch.manual_seed(cfg.seed)     # before the model is built, so that the seed sets its initial weights
+    np.random.seed(cfg.seed)
     model_cfg = ModelConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in ck["model_cfg"].items()}) \
         if ck else (model_cfg or ModelConfig())
     model = Generator(model_cfg).to(device)
@@ -253,7 +314,13 @@ def train(cfg, data_dir, run_dir, model_cfg=None, device="cuda", local_dir="/con
 
     edm = EDM(cfg.sigma_data, cfg.p_mean, cfg.p_std)
     train_set, val_set = WordSet(Path(data_dir) / "train"), WordSet(Path(data_dir) / "val")
-    batcher = Batcher(train_set, cfg.pixels, cfg.refs, seed=cfg.seed * 1_000_003 + step)
+    if cfg.reference_objective == "baseline":
+        batcher = Batcher(train_set, cfg.pixels, cfg.refs, seed=cfg.seed * 1_000_003 + step,
+                          max_ref_width=cfg.max_ref_width)
+    else:
+        batcher = PairedBatcher(train_set, cfg.pixels, cfg.refs, seed=cfg.seed * 1_000_003 + step,
+                                max_ref_width=cfg.max_ref_width, matched=cfg.reference_objective != "ungated",
+                                pair_fraction=cfg.pair_fraction)
     if accum == 0:
         accum = probe(model, logvar, edm, batcher, cfg, device, amp, log) if cuda else 1
     prefetch = Prefetch(batcher)
@@ -261,6 +328,7 @@ def train(cfg, data_dir, run_dir, model_cfg=None, device="cuda", local_dir="/con
     copier = Copier()
 
     def checkpoint():
+        copier.wait()               # the previous copy reads the local file that is replaced here
         local = local_dir / "last.pt"
         save_local({"model": model.state_dict(), "logvar": logvar.state_dict(), "opt": opt.state_dict(),
                     "ema": ema.state_dict(), "step": step, "total": total, "elapsed": elapsed,

@@ -3,7 +3,7 @@
 A batch has one width W (a multiple of 32): its words are those whose canvas fits W and not
 W - 32, so little is padding, and the number of words is set by a pixel budget (128 words at
 W = 256). Each word comes with 1 to `refs` other words of its writer (its style references,
-right-padded to a common width, cut at max_ref_width), its text as character ids, and its
+right-padded to a common width, cut at max_ref_width: whole words by default), its text as character ids, and its
 printed prior. Batches hold at most max_batch words (the narrowest words would otherwise come
 512 at a time, with 4 references each).
 """
@@ -73,7 +73,7 @@ class WordSet:
 
 
 class Batcher:
-    def __init__(self, ds, pixels=128 * 256, refs=4, max_ref_width=256, max_width=384, min_batch=8, max_batch=256,
+    def __init__(self, ds, pixels=128 * 256, refs=4, max_ref_width=384, max_width=384, min_batch=8, max_batch=256,
                  seed=0, p_all_refs=0.5):
         self.ds, self.pixels, self.refs, self.max_ref_width = ds, pixels, refs, max_ref_width
         self.min_batch, self.max_batch, self.p_all_refs = min_batch, max_batch, p_all_refs

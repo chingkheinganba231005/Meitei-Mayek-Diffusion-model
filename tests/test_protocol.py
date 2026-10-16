@@ -109,3 +109,33 @@ def test_recognise_and_score_script(data16, recogniser_dir, word_repo, tmp_path)
     assert res["words"] == 36 and res["setting"]["steps"] == 2 and "control" in res
     assert res["recogniser"]["sha"] == "0" * 40 and (tmp_path / "sheet.png").exists()
     assert res["reference_greedy_cer"] is not None and res["seconds_per_word"] > 0
+
+
+def test_writer_level_comparison(data16, recogniser_dir, word_repo, tmp_path):
+    from mayek_diffusion.scores import paired_bootstrap
+
+    a = {"0": {"characters": 10, "words": 2, "char_errors_greedy": 1, "word_errors_greedy": 1},
+         "1": {"characters": 10, "words": 2, "char_errors_greedy": 3, "word_errors_greedy": 1}}
+    b = {"0": {"characters": 10, "words": 2, "char_errors_greedy": 0, "word_errors_greedy": 0},
+         "1": {"characters": 10, "words": 2, "char_errors_greedy": 1, "word_errors_greedy": 1}}
+    r = paired_bootstrap(a, b, "cer_greedy", n=500)
+    assert r["b_minus_a"] == -0.15 and r["ci95"][0] <= -0.15 <= r["ci95"][1]
+    assert paired_bootstrap({"0": 1.0, "1": 2.0}, {"0": 0.5, "1": 1.0}, "hwd", n=200)["b_minus_a"] == -0.75
+    weights = final_pt(tmp_path / "final.pt")
+    outs = []
+    for k, steps in enumerate((2, 3)):
+        out = tmp_path / f"run{k}.json"
+        r = subprocess.run([sys.executable, "scripts/evaluate.py", "score", "--word-repo", str(word_repo),
+                            "--weights", str(weights), "--data", str(data16), "--split", "val", "--writers", "3",
+                            "--recogniser", str(recogniser_dir), "--work", str(tmp_path / f"w{k}"), "--out", str(out),
+                            "--steps", str(steps), "--sampler", "dpmpp", "--no-style", "--device", "cpu",
+                            "--label", f"run{k}"], capture_output=True, text=True, cwd=ROOT)
+        assert r.returncode == 0, r.stderr[-3000:]
+        outs.append(out)
+    res = json.loads(outs[0].read_text())
+    assert set(res["per_writer"]) == {"0", "1", "2"} and sum(v["words"] for v in res["per_writer"].values()) == res["words"]
+    r = subprocess.run([sys.executable, "scripts/compare_runs.py", "--base", str(outs[0]), "--runs", str(outs[1]),
+                        "--out", str(tmp_path / "cmp.json")], capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0, r.stderr[-3000:]
+    cmp = json.loads((tmp_path / "cmp.json").read_text())["comparisons"][0]
+    assert {"cer_greedy", "wer_greedy"} <= set(cmp) and "hwd" not in cmp

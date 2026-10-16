@@ -17,9 +17,10 @@ from .data import encode
 from .edm import EDM, dpmpp_2m, guided, heun, karras_sigmas
 
 SAMPLERS = {"heun": heun, "dpmpp": dpmpp_2m}
+MAX_REF_WIDTH = 384      # references are read whole (training words are at most 384 px wide)
 
 
-def refs_tensor(groups, device, max_width=256):
+def refs_tensor(groups, device, max_width=MAX_REF_WIDTH):
     """groups: per word, a list of float canvases (64, w), ink 1 -> ref (B, K, 64, R) in [-1, 1],
     ref_width (B, K), ref_mask (B, K)."""
     K = max(len(g) for g in groups)
@@ -53,7 +54,8 @@ def layout(printed, log_ratio, width_scale=1.0):
 
 @torch.no_grad()
 def generate(model, texts, refs, printer, edm=None, steps=16, sampler="dpmpp", guidance=2.0,
-             interval=(0.3, 5.0), width_scale=1.0, seed=0, device="cpu", dtype=None, prior=True):
+             interval=(0.3, 5.0), width_scale=1.0, seed=0, device="cpu", dtype=None, prior=True,
+             max_ref_width=MAX_REF_WIDTH):
     """texts: words; refs: the reference canvases of one writer (a list of float (64, w)
     arrays), or one such list per word, or None for a random hand (the null style, without
     guidance, at the printed width) -> list of float32 canvases (64, w), ink 1, each cut LEFT
@@ -61,7 +63,7 @@ def generate(model, texts, refs, printer, edm=None, steps=16, sampler="dpmpp", g
 
     Words are denoised in groups of the same canvas width, so that no word has more paper to
     its right than in training (less than 32 px). prior=False leaves the printed prior blank,
-    for a model trained without it (the ablation)."""
+    for a model trained without it (the ablation). References wider than max_ref_width are cut."""
     edm, prior_on = edm or EDM(), prior
     model.eval()
     B = len(texts)
@@ -71,7 +73,7 @@ def generate(model, texts, refs, printer, edm=None, steps=16, sampler="dpmpp", g
     groups = [refs] * B if isinstance(refs[0], np.ndarray) else list(refs)
     dev = torch.device(device)
     amp = torch.autocast(dev.type, dtype=dtype, enabled=dtype is not None)
-    ref, rw, rm = refs_tensor(groups, dev)
+    ref, rw, rm = refs_tensor(groups, dev, max_width=max_ref_width)
     with amp:
         g_ref = model.style(ref, rw, rm)[2]
         log_ratio = model.style.width(g_ref)[:, 0].float().cpu().numpy()
