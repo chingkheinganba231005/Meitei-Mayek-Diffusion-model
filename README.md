@@ -52,9 +52,12 @@ number written to `results/` by the code.
    The runs of the study are compared on the same validation words, with intervals from
    resampling writers. The average, the guidance, the sampler and the number of references are
    then chosen for the chosen run by a rule fixed in advance; the test writers are scored once.
-10. **The author's hand** (`owner.py`, `finetune.py`). The 100 real words of the word
-   recognition project: few-shot from four of them, and adaptation on seventy, scored on the
-   thirty held out.
+10. **The author's hand** (`owner.py`, `finetune.py`). The only real writer: the author, up to
+   500 words written on the word recognition project's writing pages (the first 100 are its
+   `real_words/`). Few-shot from four of them and from 1 to 8; adaptation on 70%, scored on the
+   30% held out; and the training study's runs on real handwriting: each held-out word written
+   with two disjoint sets of the author's words that show the same letters, and the hands
+   compared.
 
 ## Running it
 
@@ -66,9 +69,10 @@ disconnecting the runtime.
 | Notebook | Runtime | GPU hours | What it does |
 |---|---|---:|---|
 | `notebooks/1_render_data.ipynb` | CPU | 0 | renders the training, validation and test writers |
+| `notebooks/1b_author_words.ipynb` | CPU | 0 | cuts the author's newly written pages into words and adds them to the first 100 |
 | `notebooks/2_train.ipynb` | A100 | 19 (+16) | the checks and the pilot, then the runs of the training study (seeds 1 and 2 if the first results call for them) |
 | `notebooks/3_evaluate.ipynb` | A100 | 4 | the study compared on validation; the chosen run's setting; the test writers, once |
-| `notebooks/4_owner_hand.ipynb` | A100 | 0.5 | few-shot and adapted imitation of the author's hand |
+| `notebooks/4_owner_hand.ipynb` | A100 | 1.0 | the author's hand: few-shot, adapted, and the study's runs on real handwriting |
 | `notebooks/5_release.ipynb` | CPU | 0 | the model and the demo on Hugging Face |
 | `notebooks/6_generated_words_for_recognition.ipynb` | A100 | 1.0 | generated words as training data for the recogniser |
 | `notebooks/7_ablation_no_prior.ipynb` | A100 | 1.0 | training without the printed word; quality against training |
@@ -119,8 +123,9 @@ WORD_REPO=word_repo pytest -q
 - **Words** come from the word recognition project's word list (Meitei Wikipedia, CC BY-SA
   4.0, and FineWeb-2, ODC-By 1.0), split by word into training, validation and test words;
   the lists are not included here.
-- **Real handwriting:** the 100 words of the word recognition project's `real_words/`
-  (CC BY 4.0), the author's own.
+- **Real handwriting:** the author's own, and the only real writer: the 100 words of the word
+  recognition project's `real_words/` and the further words written on its writing pages
+  (notebook 1b), CC BY 4.0.
 
 ## Repository
 

@@ -65,8 +65,8 @@ at row 46 and letters 22 px high.
 - **Words:** composed by the synthesiser of the word recognition project from a word list built
   from Meitei Wikipedia (CC BY-SA 4.0) and FineWeb-2 (ODC-By 1.0); only words are used, and
   they are not redistributed.
-- **Real handwriting:** the author's own 100 words (CC BY 4.0), used only for adaptation and
-  testing.
+- **Real handwriting:** the author's own words, written on the word recognition project's
+  writing pages (CC BY 4.0), used only for adaptation and testing.
 
 ## Intended use and limits
 

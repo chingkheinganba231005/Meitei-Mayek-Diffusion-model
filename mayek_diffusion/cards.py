@@ -69,7 +69,7 @@ def results_text(r):
              f"character error rate {pct(f['recognised']['greedy']['cer'])}")
         if f.get("hwd") is not None:
             s += f" and HWD {f['hwd']:.3f}"
-        s += f"; after adaptation on 70 words, {pct(a['recognised']['greedy']['cer'])}"
+        s += f"; after adaptation on {o.get('adapted_on', 70)} words, {pct(a['recognised']['greedy']['cer'])}"
         if a.get("hwd") is not None:
             s += f" and HWD {a['hwd']:.3f}"
         parts.append(s + f" (the real words: {pct(o['real']['greedy']['cer'])}).")
@@ -83,7 +83,7 @@ def results_text(r):
 def owner_text(config):
     use = config.get("sampling", {}).get("owner")
     if use == "adapted":
-        return ("`owner_generator.safetensors` is the generator adapted to the author's hand on 70 of their words; "
+        return ("`owner_generator.safetensors` is the generator adapted to the author's hand on 70% of their words; "
                 "the demo uses it for \"the author's hand\".")
     return ""
 

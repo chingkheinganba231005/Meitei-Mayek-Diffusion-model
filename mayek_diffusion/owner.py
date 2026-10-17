@@ -96,3 +96,43 @@ def references(owner_dir, k=REFERENCES):
 
     ds = WordSet(Path(owner_dir) / "adapt")
     return [ds.target(i).astype(np.float32) / 255 for i in range(k)]
+
+
+def merge_words(old_dir, new_dir, out_dir):
+    """The released real words (images/, labels.tsv) and newly written ones cut from the same
+    writing pages (the files are named by item number) -> one set in out_dir, in item order; an
+    item in both keeps its earlier release (with its corrections) -> the number of words."""
+    import shutil
+
+    out = Path(out_dir)
+    (out / "images").mkdir(parents=True, exist_ok=True)
+    rows = {}
+    for src in (Path(new_dir), Path(old_dir)):          # the earlier release wins
+        for line in (src / "labels.tsv").read_text(encoding="utf-8").splitlines():
+            if line:
+                name, text = line.split("\t")
+                rows[name] = (src, text)
+    for name, (src, _) in rows.items():
+        shutil.copyfile(src / "images" / name, out / "images" / name)
+    (out / "labels.tsv").write_text("".join(f"{n}\t{rows[n][1]}\n" for n in sorted(rows)), encoding="utf-8")
+    return len(rows)
+
+
+def matched_pairs(targets, ref_texts, k=4, seed=0, tries=5):
+    """For each target text, two disjoint sets of k reference words (positions in ref_texts) that
+    show the same characters of the target, as the training study draws them -> list of
+    (a, b, weight); weight 0 where no matched pair was found in `tries` draws (an unmatched pair)."""
+    from .reference_evidence import match_sets
+
+    rng = np.random.default_rng(seed)
+    out = []
+    for t in targets:
+        cands = [i for i, r in enumerate(ref_texts) if r != t]
+        best = None
+        for _ in range(tries):
+            a, b, w = match_sets(t, [ref_texts[i] for i in cands], k, rng)
+            best = ([cands[i] for i in a], [cands[i] for i in b], w)
+            if w > 0:
+                break
+        out.append(best)
+    return out

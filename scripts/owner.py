@@ -13,10 +13,10 @@
         --data .../data --recogniser /content/recogniser --work /content/eval/owner \\
         --out .../results/owner.json --sheet .../eval/owner.png
 
-prepare: the real words split once with numpy.random.default_rng(2026).permutation(100): the
-first 70 for adaptation (the first 4 of them are the fixed few-shot references), the last 30
-held out; written as one-writer shard sets (owner/adapt, owner/held_out) and the split as a
-.json file.
+prepare: the real words (100 to 500 of them) split once with
+numpy.random.default_rng(2026).permutation(n): the first 70% for adaptation (the first 4 of
+them are the fixed few-shot references), the rest held out; written as one-writer shard sets
+(owner/adapt, owner/held_out) and the split as a .json file.
 
 adapt: the chosen average of the main run trained further for 1,500 steps at lr 2e-5 (100
 warm-up steps), batches of the adaptation words (their references: other adaptation words)
@@ -25,11 +25,27 @@ split), no contrastive term; the result is a plain average of the weights (decay
 About 15 minutes on an A100.
 
 score: (a) the main model with the 4 references and (b) the adapted model with the same
-references write the 30 held-out texts (--seeds samples each); for both: CER and WER through
-the recogniser (greedy and with the language model), HWD and KID against the 30 real
-held-out words, and the recogniser on those real words (the reference level). Then both
+references write the held-out texts (--seeds samples each); for both: CER and WER through
+the recogniser (greedy and with the language model), HWD and KID against the real held-out
+words, and the recogniser on those real words (the reference level). The few-shot curve: the
+main model with the first 1, 2, 4 and 8 adaptation words as references (--curve). Then both
 models on --val-writers validation writers with the chosen setting, to check that the
 adapted model still writes other hands.
+
+    python scripts/owner.py sensitivity --word-repo /content/word_repo \
+        --runs coverage=.../study/coverage_seed0/final.pt paired=.../study/paired_seed0/final.pt \
+        --setting .../results/eval_val_grid.json --owner .../data/owner --recogniser /content/recogniser \
+        --work /content/eval/sensitivity --out .../results/owner_sensitivity.json
+
+sensitivity: the test of reference consistency on real handwriting. For every held-out word,
+two disjoint sets of 4 adaptation words that show the same letters of the word (as the training
+study draws them, the same sets for every run); each run writes every held-out word once with
+each set, with the same seed. Reported per run: CER and HWD to the real words with set A and
+with set B, and the HWD between the words written with A and those written with B (the swap
+distance: how much the hand changes when the reference words change but show the same
+letters). A good generator keeps the swap distance small while the HWD to the real words
+stays small; one that ignores the references would also have a small swap distance, but a
+large HWD to the real words.
 """
 
 import argparse
@@ -44,9 +60,61 @@ def setting_of(path):
     return chosen_setting(path if path and Path(path).exists() else None)
 
 
+def sensitivity(args, setting, printer):
+    """See the module's docstring."""
+    import numpy as np
+    import torch
+
+    from mayek_diffusion.data import WordSet
+    from mayek_diffusion.evaluate import write_fixed_set, write_writer_folders
+    from mayek_diffusion.owner import matched_pairs
+    from mayek_diffusion.release import load_weights
+    from mayek_diffusion.sample import generate
+    from mayek_diffusion.scores import StyleScorer, recognise
+
+    rec, work = Path(args.recogniser), Path(args.work)
+    work.mkdir(parents=True, exist_ok=True)
+    read = lambda tar, o: recognise(tar, rec, args.word_repo, o, device=args.device)
+    scorer = None if args.no_style else StyleScorer()
+    held, adapt = WordSet(Path(args.owner) / "held_out"), WordSet(Path(args.owner) / "adapt")
+    texts, ref_texts = [str(t) for t in held.texts], [str(t) for t in adapt.texts]
+    real = [held.target(i).astype(np.float32) / 255 for i in range(len(held))]
+    shutil.rmtree(work / "real", ignore_errors=True)
+    write_writer_folders(real, [0] * len(real), work / "real")
+    pairs = matched_pairs(texts, ref_texts, 4, args.pair_seed)
+    canvas = lambda i: adapt.target(i).astype(np.float32) / 255
+    dtype = torch.bfloat16 if args.device.startswith("cuda") else None
+    res = {"setting": setting, "words": len(texts), "matched": round(float(np.mean([p[2] > 0 for p in pairs])), 4),
+           "mean_set_size": round(float(np.mean([len(p[0]) for p in pairs])), 2), "pair_seed": args.pair_seed,
+           "pairs": [[p[0], p[1], p[2]] for p in pairs], "runs": {}}
+    for spec in args.runs:
+        name, weights = spec.split("=", 1)
+        model, _ = load_weights(weights, setting["sigma_rel"], args.device)
+        row = {"weights": weights}
+        for side in (0, 1):
+            gen = generate(model, texts, [[canvas(i) for i in p[side]] for p in pairs], printer, steps=setting["steps"],
+                           sampler=setting["sampler"], guidance=setting["guidance"], interval=tuple(setting["interval"]),
+                           seed=0, device=args.device, dtype=dtype)
+            tag = f"{name}_{'ab'[side]}"
+            write_fixed_set(gen, texts, work / f"{tag}.tar")
+            r = read(work / f"{tag}.tar", work / f"{tag}.json")
+            row[f"greedy_cer_{'ab'[side]}"] = r["greedy"]["cer"]
+            row[f"with_lm_cer_{'ab'[side]}"] = r["with_lm"]["cer"] if r["with_lm"] else None
+            shutil.rmtree(work / tag, ignore_errors=True)
+            write_writer_folders(gen, [0] * len(gen), work / tag)
+            if scorer is not None:
+                row[f"hwd_{'ab'[side]}"] = scorer(work / tag, work / "real", ("hwd",))["hwd"]
+        if scorer is not None:
+            row["swap_hwd"] = scorer(work / f"{name}_b", work / f"{name}_a", ("hwd",))["hwd"]
+        res["runs"][name] = row
+        print(name, json.dumps({k: v for k, v in row.items() if k != "weights"}), flush=True)
+        del model
+    Path(args.out).write_text(json.dumps(res, indent=1, ensure_ascii=False), encoding="utf-8")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["prepare", "adapt", "score"])
+    ap.add_argument("command", choices=["prepare", "adapt", "score", "sensitivity"])
     ap.add_argument("--word-repo", required=True)
     ap.add_argument("--real", help="prepare: the real word set (images/, labels.tsv)")
     ap.add_argument("--split", help="prepare: the split, .json")
@@ -64,6 +132,9 @@ def main():
     ap.add_argument("--sheet", help="score: real | few-shot | adapted, .png")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--val-writers", type=int, default=100)
+    ap.add_argument("--curve", type=int, nargs="*", default=[1, 2, 4, 8], help="score: references of the few-shot curve")
+    ap.add_argument("--runs", nargs="+", help="sensitivity: name=weights ...")
+    ap.add_argument("--pair-seed", type=int, default=0, help="sensitivity: the draw of the reference sets")
     ap.add_argument("--no-style", action="store_true")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--tiny", action="store_true", help="adapt: small batches (dry runs on CPU)")
@@ -112,6 +183,10 @@ def main():
         print(json.dumps({"steps": cfg.steps, "last": history[-1] if history else None, "out": str(out)}))
         return
 
+    if args.command == "sensitivity":
+        sensitivity(args, setting, printer)
+        return
+
     # score
     from mayek_diffusion.evaluate import write_fixed_set, write_writer_folders
     from mayek_diffusion.protocol import Evaluator
@@ -132,7 +207,7 @@ def main():
     shutil.rmtree(work / "real", ignore_errors=True)
     write_writer_folders(real, [0] * len(real), work / "real")
     res = {"setting": setting, "seeds": args.seeds, "held_out": len(texts), "references": len(refs),
-           "real": read(work / "real.tar", work / "real.json")}
+           "adapted_on": len(WordSet(Path(args.owner) / "adapt")), "real": read(work / "real.tar", work / "real.json")}
     gens = {}
     for name, path in (("few_shot", args.weights), ("adapted", args.adapted)):
         model, _ = load_weights(path, setting["sigma_rel"], args.device)
@@ -148,7 +223,30 @@ def main():
             shutil.rmtree(work / name, ignore_errors=True)
             write_writer_folders(gen, [0] * len(gen), work / name)
             row.update(scorer(work / name, work / "real", ("hwd", "kid")))
+            row.pop("hwd_per_writer", None)
         res[name] = row
+        del model
+    if args.curve:
+        adapt = WordSet(Path(args.owner) / "adapt")
+        model, _ = load_weights(args.weights, setting["sigma_rel"], args.device)
+        res["few_shot_curve"] = {}
+        for k in args.curve:
+            refs_k = [adapt.target(i).astype(np.float32) / 255 for i in range(min(k, len(adapt)))]
+            gen = []
+            for seed in range(args.seeds):
+                gen += generate(model, texts, refs_k, printer, steps=setting["steps"], sampler=setting["sampler"],
+                                guidance=setting["guidance"], interval=tuple(setting["interval"]), seed=seed,
+                                device=args.device, dtype=dtype)
+            write_fixed_set(gen, texts * args.seeds, work / f"curve_{k}.tar")
+            r = read(work / f"curve_{k}.tar", work / f"curve_{k}.json")
+            row = {"references": len(refs_k), "greedy_cer": r["greedy"]["cer"],
+                   "with_lm_cer": r["with_lm"]["cer"] if r["with_lm"] else None}
+            if scorer is not None:
+                shutil.rmtree(work / f"curve_{k}", ignore_errors=True)
+                write_writer_folders(gen, [0] * len(gen), work / f"curve_{k}")
+                row.update(scorer(work / f"curve_{k}", work / "real", ("hwd",)))
+                row.pop("hwd_per_writer", None)
+            res["few_shot_curve"][str(k)] = row
         del model
     if args.val_writers and args.data:
         val = WordSet(Path(args.data) / "val")

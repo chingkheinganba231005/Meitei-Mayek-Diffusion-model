@@ -86,3 +86,21 @@ def test_adapt(data_dir, tmp_path, tools):
     assert info["kind"] == "adapted" and info["sigma_rel"] == 0.10 and info["prior"] is True
     out = generate(m2, ["ꯃꯤꯇꯩ"], references(tmp_path / "owner", 2), tools[2], steps=3)
     assert out[0].shape[0] == CANVAS_H
+
+
+def test_new_pages_merge_with_the_released_words(word_repo, tmp_path):
+    import shutil
+
+    from mayek_diffusion.owner import merge_words, read_words
+
+    real = word_repo / "real_words"
+    rows = [line.split("\t") for line in (real / "labels.tsv").read_text(encoding="utf-8").splitlines() if line]
+    for name, part in (("old", rows[:5]), ("new", rows[3:8])):
+        (tmp_path / name / "images").mkdir(parents=True)
+        for f, _ in part:
+            shutil.copyfile(real / "images" / f, tmp_path / name / "images" / f)
+        texts = {f: ("ꯑ" if name == "new" and k == 0 else t) for k, (f, t) in enumerate(part)}
+        (tmp_path / name / "labels.tsv").write_text("".join(f"{f}\t{t}\n" for f, t in texts.items()), encoding="utf-8")
+    assert merge_words(tmp_path / "old", tmp_path / "new", tmp_path / "all") == 8
+    names, texts, grays = read_words(tmp_path / "all")
+    assert names == [r[0] for r in rows[:8]] and texts[3] == rows[3][1] and len(grays) == 8

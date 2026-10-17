@@ -58,12 +58,17 @@ def coverage(target, texts):
     return set(target) & set("".join(texts))
 
 
-def match_sets(target, texts, k, rng, tries=4, matched=True):
+def match_sets(target, texts, k, rng, tries=4, matched=True, pool=15):
     """Two disjoint sets of positions in `texts` (candidate references of one writer, distinct
     texts) -> (a, b, weight): b covers the same characters of `target` as a, and weight is the
     share of the target's characters they cover; (a, b, 0.0) for an unmatched pair; None if fewer
     than two candidates. matched=False: a is drawn as before, b is a random disjoint set of the
-    same size (the ungated variant), and the weight is 1."""
+    same size (the ungated variant), and the weight is 1. A writer with more than `pool` other
+    words (a real writer) is searched among `pool` of them, drawn at random, as in training."""
+    if len(texts) > pool:
+        keep = sorted(rng.choice(len(texts), pool, replace=False).tolist())
+        found = match_sets(target, [texts[i] for i in keep], k, rng, tries, matched, pool)
+        return found and ([keep[i] for i in found[0]], [keep[i] for i in found[1]], found[2])
     n = len(texts)
     if n < 2:
         return None

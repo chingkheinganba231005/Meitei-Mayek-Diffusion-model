@@ -40,7 +40,15 @@ def test_owner_prepare_adapt_score(word_repo, data_dir, data16, recogniser_dir, 
               "--adapted", tmp_path / "owner.pt", "--setting", tmp_path / "grid.json", "--owner", owner,
               "--data", data16, "--recogniser", recogniser_dir, "--work", tmp_path / "work",
               "--out", results / "owner.json", "--sheet", tmp_path / "owner.png", "--seeds", 1,
-              "--val-writers", 2, "--no-style", "--device", "cpu")
+              "--val-writers", 2, "--no-style", "--device", "cpu", "--curve", 1, 2)
     res = json.loads((results / "owner.json").read_text())
     assert res["held_out"] == 30 and res["few_shot"]["recognised"]["words"] == 30
     assert res["adapted"]["validation_writers"]["writers"] == 2 and (tmp_path / "owner.png").exists()
+    assert set(res["few_shot_curve"]) == {"1", "2"} and res["few_shot_curve"]["2"]["references"] == 2
+    run("scripts/owner.py", "sensitivity", "--word-repo", word_repo, "--runs", f"main={tmp_path / 'final.pt'}",
+        f"adapted={tmp_path / 'owner.pt'}", "--setting", tmp_path / "grid.json", "--owner", owner,
+        "--recogniser", recogniser_dir, "--work", tmp_path / "sens", "--out", results / "sens.json", "--no-style",
+        "--device", "cpu")
+    sens = json.loads((results / "sens.json").read_text())
+    assert sens["words"] == 30 and sens["matched"] > 0.5 and set(sens["runs"]) == {"main", "adapted"}
+    assert "greedy_cer_a" in sens["runs"]["main"] and "greedy_cer_b" in sens["runs"]["main"]
